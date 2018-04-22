@@ -16,15 +16,17 @@ import "syscall"
 import "time"
 
 type SplinkHeader struct {
-	Op uint8
-	Len uint8
+	Op   uint8
+	Len  uint8
 	Addr uint32
 }
+
 const SplinkHeaderLen = 8
 
 type SplinkOperation byte
+
 const (
-	SplinkReadOp SplinkOperation = 'Q'
+	SplinkReadOp  SplinkOperation = 'Q'
 	SplinkWriteOp SplinkOperation = 'W'
 )
 
@@ -35,13 +37,20 @@ const (
 	SplinkAddrChallengeSuccess = 0x001F0010
 )
 
+const (
+	scaleVac     = 4798.0
+	scaleIac     = 2000.0
+	scalePower   = scaleVac * (scaleIac / 3276800.0)
+	scalePower32 = scalePower / 8.0
+)
+
 func main() {
 	// read configuration data
 	viper.SetDefault("port", "3000")
 	viper.SetDefault("influx_host", "localhost")
 	viper.SetDefault("influx_port", "8089") // default port for influx udp protocol
 	viper.SetDefault("password", "Selectronic SP PRO")
-	
+
 	viper.SetConfigName("config")
 	viper.AddConfigPath("/etc/splink")
 	viper.AddConfigPath(".")
@@ -53,7 +62,7 @@ func main() {
 	// connect to serial host
 	serialHost := viper.GetString("host")
 	serialPort := viper.GetString("port")
-	conn, err := net.Dial("tcp", serialHost + ":" + serialPort)
+	conn, err := net.Dial("tcp", serialHost+":"+serialPort)
 	if err != nil {
 		log.Fatal("Error connecting to serial host: ", err)
 	}
@@ -101,20 +110,66 @@ func main() {
 }
 
 func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
+	var signedPower, loadPower, sourcePower int32
+
+	// multiple reads for different values
+	// net power (32-bit signed)
 	val := splinkRead(conn, 0x0000A058, 2)
-	var signedPower int32
 	binary.Read(bytes.NewReader(val), binary.LittleEndian, &signedPower)
-	
-	tags := map[string]string {
+
+	// source power (32-bit)
+	val = splinkRead(conn, 0x0000A08E, 2)
+	binary.Read(bytes.NewReader(val), binary.LittleEndian, &sourcePower)
+
+	// load power (32-bit)
+	val = splinkRead(conn, 0x0000A093, 2)
+	binary.Read(bytes.NewReader(val), binary.LittleEndian, &loadPower)
+
+	// generator start/run reason
+	val = splinkRead(conn, 0x0000A07E, 2)
+	genStartReason := val[1]
+	genRunReason := val[3]
+
+	t := time.Now()
+
+	tags := map[string]string{
 		"type": "power",
 	}
 	fields := map[string]interface{}{
-		"signed_power": float64(signedPower) * (4798.0 * (2000.0 / 26214400.0 / 1000.0)),
+		"signed_power": float64(signedPower) * scalePower32 / 1000.0,
 	}
-	pt, err := influxdb.NewPoint("power", tags, fields, time.Now())
+	pt, err := influxdb.NewPoint("power", tags, fields, t)
 	if err != nil {
 		log.Println("Error: ", err)
 	}
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "source_power",
+	}
+	fields = map[string]interface{}{
+		"value": float64(sourcePower) * scalePower32,
+	}
+	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "load_power",
+	}
+	fields = map[string]interface{}{
+		"value": float64(loadPower) * scalePower32,
+	}
+	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "generator",
+	}
+	fields = map[string]interface{}{
+		"start_reason": genStartReason,
+		"run_reason":   genRunReason,
+	}
+	pt, _ = influxdb.NewPoint("splink_status", tags, fields, t)
 	bp.AddPoint(pt)
 }
 
@@ -144,7 +199,7 @@ func splinkAuthenticate(conn net.Conn, password string) uint16 {
 func splinkDisconnect(conn net.Conn, comPort uint16) {
 	if comPort == 1 || comPort == 2 {
 		log.Println("Disconnecting...")
-		splinkWrite(conn, SplinkAddrDisconnect + uint32(comPort) - 1, []uint16{1})
+		splinkWrite(conn, SplinkAddrDisconnect+uint32(comPort)-1, []uint16{1})
 	}
 }
 
@@ -152,8 +207,8 @@ func splinkMakeHeader(op SplinkOperation, address uint32, dataLen uint8) []byte 
 	packetBuf := new(bytes.Buffer)
 
 	header := SplinkHeader{
-		Op: byte(op),
-		Len: dataLen - 1,
+		Op:   byte(op),
+		Len:  dataLen - 1,
 		Addr: address,
 	}
 	binary.Write(packetBuf, binary.LittleEndian, header)
@@ -184,7 +239,7 @@ func splinkRead(conn net.Conn, address uint32, respLen uint8) []byte {
 	}
 
 	// return only data (discard header and data crc)
-	return resp[SplinkHeaderLen : len(resp) - 2]
+	return resp[SplinkHeaderLen : len(resp)-2]
 }
 
 func splinkWrite(conn net.Conn, address uint32, data []uint16) {
