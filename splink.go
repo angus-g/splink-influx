@@ -121,9 +121,12 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	val = splinkRead(conn, 0x0000A093, 2)
 	loadPower := binary.LittleEndian.Uint32(val)
 
-	// load energy (accumulated) (16-bit)
-	val = splinkRead(conn, 0x0000A0BE, 1)
-	loadEnergy := binary.LittleEndian.Uint16(val)
+	// load and input energy (accumulated) (16-bit)
+	// input hours (16-bit)
+	val = splinkRead(conn, 0x0000A0BE, 3)
+	loadEnergy := binary.LittleEndian.Uint16(val[:2])
+	inputEnergy := binary.LittleEndian.Uint16(val[2:4])
+	inputHours := binary.LittleEndian.Uint16(val[4:6])
 
 	// generator start/run reason
 	val = splinkRead(conn, 0x0000A07E, 2)
@@ -155,6 +158,24 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	}
 	fields = map[string]interface{}{
 		"value": float64(loadEnergy) * scaleEnergy,
+	}
+	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "ac_input_energy",
+	}
+	fields = map[string]interface{}{
+		"value": float64(inputEnergy) * scaleEnergy,
+	}
+	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "ac_input_hours",
+	}
+	fields = map[string]interface{}{
+		"value": float64(inputHours) / 60.0,
 	}
 	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
 	bp.AddPoint(pt)
