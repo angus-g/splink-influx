@@ -42,6 +42,7 @@ const (
 	scaleIac     = 2000.0
 	scalePower   = scaleVac * (scaleIac / 3276800.0)
 	scalePower32 = scalePower / 8.0
+	scaleEnergy  = 24.0 * scalePower
 )
 
 func main() {
@@ -110,20 +111,18 @@ func main() {
 }
 
 func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
-	var signedPower, loadPower, sourcePower int32
-
 	// multiple reads for different values
-	// net power (32-bit signed)
-	val := splinkRead(conn, 0x0000A058, 2)
-	binary.Read(bytes.NewReader(val), binary.LittleEndian, &signedPower)
-
-	// source power (32-bit)
-	val = splinkRead(conn, 0x0000A08E, 2)
-	binary.Read(bytes.NewReader(val), binary.LittleEndian, &sourcePower)
+	// source power (16-bit)
+	val := splinkRead(conn, 0x0000A08A, 1)
+	sourcePower := binary.LittleEndian.Uint16(val)
 
 	// load power (32-bit)
 	val = splinkRead(conn, 0x0000A093, 2)
-	binary.Read(bytes.NewReader(val), binary.LittleEndian, &loadPower)
+	loadPower := binary.LittleEndian.Uint32(val)
+
+	// load energy (accumulated) (16-bit)
+	val = splinkRead(conn, 0x0000A0BE, 1)
+	loadEnergy := binary.LittleEndian.Uint16(val)
 
 	// generator start/run reason
 	val = splinkRead(conn, 0x0000A07E, 2)
@@ -133,24 +132,12 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	t := time.Now()
 
 	tags := map[string]string{
-		"type": "power",
-	}
-	fields := map[string]interface{}{
-		"signed_power": float64(signedPower) * scalePower32 / 1000.0,
-	}
-	pt, err := influxdb.NewPoint("power", tags, fields, t)
-	if err != nil {
-		log.Println("Error: ", err)
-	}
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
 		"type": "source_power",
 	}
-	fields = map[string]interface{}{
-		"value": float64(sourcePower) * scalePower32,
+	fields := map[string]interface{}{
+		"value": float64(sourcePower) * scalePower,
 	}
-	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	pt, _ := influxdb.NewPoint("splink_values", tags, fields, t)
 	bp.AddPoint(pt)
 
 	tags = map[string]string{
@@ -158,6 +145,15 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	}
 	fields = map[string]interface{}{
 		"value": float64(loadPower) * scalePower32,
+	}
+	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
+	bp.AddPoint(pt)
+
+	tags = map[string]string{
+		"type": "ac_load_energy",
+	}
+	fields = map[string]interface{}{
+		"value": float64(loadEnergy) * scaleEnergy,
 	}
 	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
 	bp.AddPoint(pt)
