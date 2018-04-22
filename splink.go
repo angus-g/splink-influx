@@ -114,7 +114,8 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	// multiple reads for different values
 	// source power (16-bit)
 	val := splinkRead(conn, 0x0000A08A, 1)
-	sourcePower := binary.LittleEndian.Uint16(val)
+	var sourcePower int16
+	binary.Read(bytes.NewBuffer(val), binary.LittleEndian, &sourcePower)
 
 	// load power (32-bit)
 	val = splinkRead(conn, 0x0000A093, 2)
@@ -126,8 +127,8 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 
 	// generator start/run reason
 	val = splinkRead(conn, 0x0000A07E, 2)
-	genStartReason := val[1]
-	genRunReason := val[3]
+	genStartReason := val[0]
+	genRunReason := val[2]
 
 	t := time.Now()
 
