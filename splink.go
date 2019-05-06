@@ -238,6 +238,9 @@ func splinkMakeHeader(op SplinkOperation, address uint32, dataLen uint8) []byte 
 }
 
 func splinkRead(conn net.Conn, address uint32, respLen uint8) []byte {
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+
 	packet := splinkMakeHeader(SplinkReadOp, address, respLen)
 	_, err := conn.Write(packet)
 	if err != nil {
