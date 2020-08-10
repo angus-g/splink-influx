@@ -1,10 +1,11 @@
 package main
 
 import "bytes"
-import "crc"
 import "crypto/md5"
 import "encoding/binary"
-import influxdb "github.com/influxdata/influxdb1-client/v2"
+import "github.com/angus-g/splink-influx/crc"
+import "github.com/influxdata/influxdb-client-go"
+import "github.com/influxdata/influxdb-client-go/api"
 import "github.com/spf13/viper"
 import "io"
 import "log"
@@ -49,7 +50,7 @@ func main() {
 	// read configuration data
 	viper.SetDefault("port", "3000")
 	viper.SetDefault("influx_host", "localhost")
-	viper.SetDefault("influx_port", "8089") // default port for influx udp protocol
+	viper.SetDefault("influx_port", "8086")
 	viper.SetDefault("password", "Selectronic SP PRO")
 
 	viper.SetConfigName("config")
@@ -67,7 +68,6 @@ func main() {
 	if err != nil {
 		log.Fatal("Error connecting to serial host: ", err)
 	}
-	defer conn.Close()
 
 	// authenticate to inverter
 	comPort := splinkAuthenticate(conn, viper.GetString("password"))
@@ -86,31 +86,33 @@ func main() {
 	// make influxdb client
 	influxHost := viper.GetString("influx_host")
 	influxPort := viper.GetString("influx_port")
-	influxConf := influxdb.UDPConfig{Addr: influxHost + ":" + influxPort}
-	influxConn, err := influxdb.NewUDPClient(influxConf)
-	if err != nil {
-		log.Println("Influx error: ", err)
-		return
-	}
+	influxConn := influxdb2.NewClient("http://"+influxHost+":"+influxPort, "")
 	defer influxConn.Close()
 
-	influxBatch, _ := influxdb.NewBatchPoints(influxdb.BatchPointsConfig{
-		Precision: "s",
-	})
+	// for InfluxDB 1.8: no org, bucket is db name
+	influxWrite := influxConn.WriteAPI("", "inverter")
 
 	// ticker to request new data every 15 seconds
 	ticker := time.NewTicker(15 * time.Second)
 	go func() {
 		for _ = range ticker.C {
-			splinkRequestData(conn, influxBatch)
-			influxConn.Write(influxBatch)
+			splinkRequestData(conn, influxWrite)
 		}
 	}()
 
 	select {}
 }
 
-func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
+// write a float64 value into the "splink_values" measurement
+func writeFloat(wa api.WriteAPI, value_type string, value float64, t time.Time) {
+	pt := influxdb2.NewPointWithMeasurement("splink_values").
+		AddTag("type", value_type).
+		AddField("value", value).
+		SetTime(t)
+	wa.WritePoint(pt)
+}
+
+func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
 	// multiple reads for different values
 	// source power (16-bit)
 	val := splinkRead(conn, 0x0000A08A, 1)
@@ -134,61 +136,18 @@ func splinkRequestData(conn net.Conn, bp influxdb.BatchPoints) {
 	genRunReason := val[2]
 
 	t := time.Now()
+	writeFloat(wa, "source_power", float64(sourcePower)*scalePower, t)
+	writeFloat(wa, "load_power", float64(loadPower)*scalePower32, t)
+	writeFloat(wa, "ac_load_energy", float64(loadEnergy)*scaleEnergy, t)
+	writeFloat(wa, "ac_input_energy", float64(inputEnergy)*scaleEnergy, t)
+	writeFloat(wa, "ac_input_hours", float64(inputHours)/60.0, t)
 
-	tags := map[string]string{
-		"type": "source_power",
-	}
-	fields := map[string]interface{}{
-		"value": float64(sourcePower) * scalePower,
-	}
-	pt, _ := influxdb.NewPoint("splink_values", tags, fields, t)
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
-		"type": "load_power",
-	}
-	fields = map[string]interface{}{
-		"value": float64(loadPower) * scalePower32,
-	}
-	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
-		"type": "ac_load_energy",
-	}
-	fields = map[string]interface{}{
-		"value": float64(loadEnergy) * scaleEnergy,
-	}
-	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
-		"type": "ac_input_energy",
-	}
-	fields = map[string]interface{}{
-		"value": float64(inputEnergy) * scaleEnergy,
-	}
-	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
-		"type": "ac_input_hours",
-	}
-	fields = map[string]interface{}{
-		"value": float64(inputHours) / 60.0,
-	}
-	pt, _ = influxdb.NewPoint("splink_values", tags, fields, t)
-	bp.AddPoint(pt)
-
-	tags = map[string]string{
-		"type": "generator",
-	}
-	fields = map[string]interface{}{
-		"start_reason": genStartReason,
-		"run_reason":   genRunReason,
-	}
-	pt, _ = influxdb.NewPoint("splink_status", tags, fields, t)
-	bp.AddPoint(pt)
+	pt := influxdb2.NewPointWithMeasurement("splink_status").
+		AddTag("type", "generator").
+		AddField("start_reason", int32(genStartReason)).
+		AddField("run_reason", int32(genRunReason)).
+		SetTime(t)
+	wa.WritePoint(pt)
 }
 
 func splinkAuthenticate(conn net.Conn, password string) uint16 {
@@ -219,6 +178,7 @@ func splinkDisconnect(conn net.Conn, comPort uint16) {
 		log.Println("Disconnecting...")
 		splinkWrite(conn, SplinkAddrDisconnect+uint32(comPort)-1, []uint16{1})
 	}
+	conn.Close()
 }
 
 func splinkMakeHeader(op SplinkOperation, address uint32, dataLen uint8) []byte {
