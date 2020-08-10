@@ -25,6 +25,6 @@ Configuration uses the [Viper](https://github.com/spf13/viper) configuration sys
 
 - `host` -- the serial to Ethernet host
 - `port` -- the port over which serial to Ethernet is served
-- `influx_host` -- the host running InfluxDB, accepting UDP data
-- `influx_port` -- the port on which InfluxDB is listening for UDP data
+- `influx_host` -- the host running InfluxDB
+- `influx_port` -- the port on which InfluxDB is listening for data
 - `password` -- the management password for the SP PRO
