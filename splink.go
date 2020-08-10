@@ -50,8 +50,10 @@ const (
 )
 
 type SavedState struct {
+	ChargingMode         int
 	GeneratorStartReason int
 	GeneratorRunReason   int
+	SourceStatus         int
 }
 
 func main() {
@@ -103,7 +105,7 @@ func main() {
 	// ticker to request new data every 15 seconds
 	ticker := time.NewTicker(15 * time.Second)
 	go func() {
-		ss := SavedState{-1, -1}
+		ss := SavedState{-1, -1, -1, -1}
 		for _ = range ticker.C {
 			splinkRequestData(conn, influxWrite, &ss)
 		}
@@ -117,6 +119,15 @@ func writeFloat(wa api.WriteAPI, value_type string, value float64, t time.Time) 
 	pt := influxdb2.NewPointWithMeasurement("splink_values").
 		AddTag("type", value_type).
 		AddField("value", value).
+		SetTime(t)
+	wa.WritePoint(pt)
+}
+
+func writeTransition(wa api.WriteAPI, value_type string, from_state string, to_state string, t time.Time) {
+	pt := influxdb2.NewPointWithMeasurement("splink_states").
+		AddTag("type", value_type).
+		AddField("from_state", from_state).
+		AddField("to_tate", to_state).
 		SetTime(t)
 	wa.WritePoint(pt)
 }
@@ -145,17 +156,30 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI, ss *SavedState) {
 	inputEnergy := binary.LittleEndian.Uint16(val[2:4])
 	inputHours := binary.LittleEndian.Uint16(val[4:6])
 
-	// generator start/run reason
-	val = splinkRead(conn, 0x0000A07E, 2)
-	genStartReason := int(val[0])
-	genRunReason := int(val[2])
+	// enumerated states:
+	// - charging mode
+	// - output mode
+	// - gen start reason
+	// - gen run reason
+	// - source status
+	val = splinkRead(conn, 0x0000A07C, 5)
+	chargingMode := int(val[0])
+	genStartReason := int(val[4])
+	genRunReason := int(val[6])
+	sourceStatus := int(val[8])
 
 	// initial populate
+	if ss.ChargingMode == -1 {
+		ss.ChargingMode = chargingMode
+	}
 	if ss.GeneratorStartReason == -1 {
 		ss.GeneratorStartReason = genStartReason
 	}
 	if ss.GeneratorRunReason == -1 {
 		ss.GeneratorRunReason = genRunReason
+	}
+	if ss.SourceStatus == -1 {
+		ss.SourceStatus = sourceStatus
 	}
 
 	t := time.Now()
@@ -167,32 +191,32 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI, ss *SavedState) {
 	writeFloat(wa, "ac_input_hours", float64(inputHours)/60.0, t)
 
 	// update stateful statuses only on state change
+	if ss.ChargingMode != chargingMode {
+		fromState := splinkChargingMode(ss.ChargingMode)
+		toState := splinkChargingMode(chargingMode)
+		writeTransition(wa, "charging_mode", fromState, toState, t)
+		ss.ChargingMode = chargingMode
+	}
+
 	if ss.GeneratorStartReason != genStartReason {
 		fromState := splinkGeneratorReason(ss.GeneratorStartReason)
 		toState := splinkGeneratorReason(genStartReason)
-
-		pt := influxdb2.NewPointWithMeasurement("splink_states").
-			AddTag("type", "generator_start_reason").
-			AddField("from_state", fromState).
-			AddField("to_state", toState).
-			SetTime(t)
-		wa.WritePoint(pt)
-
+		writeTransition(wa, "generator_start_reason", fromState, toState, t)
 		ss.GeneratorStartReason = genStartReason
 	}
 
 	if ss.GeneratorRunReason != genRunReason {
 		fromState := splinkGeneratorReason(ss.GeneratorRunReason)
 		toState := splinkGeneratorReason(genRunReason)
-
-		pt := influxdb2.NewPointWithMeasurement("splink_states").
-			AddTag("type", "generator_run_reason").
-			AddField("from_state", fromState).
-			AddField("to_state", toState).
-			SetTime(t)
-		wa.WritePoint(pt)
-
+		writeTransition(wa, "generator_run_reason", fromState, toState, t)
 		ss.GeneratorRunReason = genRunReason
+	}
+
+	if ss.SourceStatus != sourceStatus {
+		fromState := splinkSourceStatus(ss.SourceStatus)
+		toState := splinkSourceStatus(sourceStatus)
+		writeTransition(wa, "ac_source_status", fromState, toState, t)
+		ss.SourceStatus = sourceStatus
 	}
 }
 
