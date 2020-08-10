@@ -18,6 +18,7 @@ var genReason = []string{
 	"generator exercise",
 	"generator available",
 	"generator fault",
+	"minimum runtime",
 	"generator lockout active",
 	"battery float",
 	"cooling down",
@@ -28,6 +29,9 @@ var genReason = []string{
 	"support mode",
 	"equalise",
 	"battery load",
+	"invalid",
+	"invalid",
+	"invalid",
 	"warming up",
 }
 
