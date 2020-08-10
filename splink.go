@@ -49,6 +49,11 @@ const (
 	scaleTemp    = 480.0
 )
 
+type SavedState struct {
+	GeneratorStartReason int
+	GeneratorRunReason   int
+}
+
 func main() {
 	// read configuration data
 	viper.SetDefault("port", "3000")
@@ -98,8 +103,9 @@ func main() {
 	// ticker to request new data every 15 seconds
 	ticker := time.NewTicker(15 * time.Second)
 	go func() {
+		ss := SavedState{-1, -1}
 		for _ = range ticker.C {
-			splinkRequestData(conn, influxWrite)
+			splinkRequestData(conn, influxWrite, &ss)
 		}
 	}()
 
@@ -115,7 +121,7 @@ func writeFloat(wa api.WriteAPI, value_type string, value float64, t time.Time) 
 	wa.WritePoint(pt)
 }
 
-func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
+func splinkRequestData(conn net.Conn, wa api.WriteAPI, ss *SavedState) {
 	// multiple reads for different values
 
 	// battery voltage (16-bit)
@@ -141,8 +147,16 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
 
 	// generator start/run reason
 	val = splinkRead(conn, 0x0000A07E, 2)
-	genStartReason := val[0]
-	genRunReason := val[2]
+	genStartReason := int(val[0])
+	genRunReason := int(val[2])
+
+	// initial populate
+	if ss.GeneratorStartReason == -1 {
+		ss.GeneratorStartReason = genStartReason
+	}
+	if ss.GeneratorRunReason == -1 {
+		ss.GeneratorRunReason = genRunReason
+	}
 
 	t := time.Now()
 	writeFloat(wa, "battery_voltage", float64(batteryVoltage)*scaleVdc, t)
@@ -152,12 +166,34 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
 	writeFloat(wa, "ac_input_energy", float64(inputEnergy)*scaleEnergy, t)
 	writeFloat(wa, "ac_input_hours", float64(inputHours)/60.0, t)
 
-	pt := influxdb2.NewPointWithMeasurement("splink_status").
-		AddTag("type", "generator").
-		AddField("start_reason", int32(genStartReason)).
-		AddField("run_reason", int32(genRunReason)).
-		SetTime(t)
-	wa.WritePoint(pt)
+	// update stateful statuses only on state change
+	if ss.GeneratorStartReason != genStartReason {
+		fromState := splinkGeneratorReason(ss.GeneratorStartReason)
+		toState := splinkGeneratorReason(genStartReason)
+
+		pt := influxdb2.NewPointWithMeasurement("splink_states").
+			AddTag("type", "generator_start_reason").
+			AddField("from_state", fromState).
+			AddField("to_state", toState).
+			SetTime(t)
+		wa.WritePoint(pt)
+
+		ss.GeneratorStartReason = genStartReason
+	}
+
+	if ss.GeneratorRunReason != genRunReason {
+		fromState := splinkGeneratorReason(ss.GeneratorRunReason)
+		toState := splinkGeneratorReason(genRunReason)
+
+		pt := influxdb2.NewPointWithMeasurement("splink_states").
+			AddTag("type", "generator_run_reason").
+			AddField("from_state", fromState).
+			AddField("to_state", toState).
+			SetTime(t)
+		wa.WritePoint(pt)
+
+		ss.GeneratorRunReason = genRunReason
+	}
 }
 
 func splinkAuthenticate(conn net.Conn, password string) uint16 {
