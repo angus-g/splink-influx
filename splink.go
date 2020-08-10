@@ -39,11 +39,14 @@ const (
 )
 
 const (
+	scaleVdc     = 958.0 / 327680.0
+	scaleIdc     = 10738.0
 	scaleVac     = 4798.0
 	scaleIac     = 2000.0
 	scalePower   = scaleVac * (scaleIac / 3276800.0)
 	scalePower32 = scalePower / 8.0
 	scaleEnergy  = 24.0 * scalePower
+	scaleTemp    = 480.0
 )
 
 func main() {
@@ -114,8 +117,14 @@ func writeFloat(wa api.WriteAPI, value_type string, value float64, t time.Time) 
 
 func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
 	// multiple reads for different values
+
+	// battery voltage (16-bit)
+	val := splinkRead(conn, 0x0000A05C, 1)
+	var batteryVoltage int16
+	binary.Read(bytes.NewBuffer(val), binary.LittleEndian, &batteryVoltage)
+
 	// source power (16-bit)
-	val := splinkRead(conn, 0x0000A08A, 1)
+	val = splinkRead(conn, 0x0000A08A, 1)
 	var sourcePower int16
 	binary.Read(bytes.NewBuffer(val), binary.LittleEndian, &sourcePower)
 
@@ -136,6 +145,7 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI) {
 	genRunReason := val[2]
 
 	t := time.Now()
+	writeFloat(wa, "battery_voltage", float64(batteryVoltage)*scaleVdc, t)
 	writeFloat(wa, "source_power", float64(sourcePower)*scalePower, t)
 	writeFloat(wa, "load_power", float64(loadPower)*scalePower32, t)
 	writeFloat(wa, "ac_load_energy", float64(loadEnergy)*scaleEnergy, t)
