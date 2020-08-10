@@ -127,7 +127,7 @@ func writeTransition(wa api.WriteAPI, value_type string, from_state string, to_s
 	pt := influxdb2.NewPointWithMeasurement("splink_states").
 		AddTag("type", value_type).
 		AddField("from_state", from_state).
-		AddField("to_tate", to_state).
+		AddField("to_state", to_state).
 		SetTime(t)
 	wa.WritePoint(pt)
 }
