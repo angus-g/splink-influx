@@ -28,5 +28,3 @@ Configuration uses the [Viper](https://github.com/spf13/viper) configuration sys
 - `influx_host` -- the host running InfluxDB, accepting UDP data
 - `influx_port` -- the port on which InfluxDB is listening for UDP data
 - `password` -- the management password for the SP PRO
-
-InfluxDB will also have to be configured to accept data via its UDP protocol.  This is usually as simple as setting `enabled = true` in the `[[udp]]` section of its configuration file.
