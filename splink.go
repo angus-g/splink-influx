@@ -157,16 +157,16 @@ func splinkRequestData(conn net.Conn, wa api.WriteAPI, ss *SavedState) {
 	inputHours := binary.LittleEndian.Uint16(val[4:6])
 
 	// enumerated states:
-	// - charging mode
-	// - output mode
-	// - gen start reason
-	// - gen run reason
-	// - source status
-	val = splinkRead(conn, 0x0000A07C, 5)
+	// charging mode is from the technical data tab
+	val = splinkRead(conn, 0x0000A045, 1)
 	chargingMode := int(val[0])
-	genStartReason := int(val[4])
-	genRunReason := int(val[6])
-	sourceStatus := int(val[8])
+
+	// other states are from the now tab
+	// val[0] is output mode
+	val = splinkRead(conn, 0x0000A07D, 4)
+	genStartReason := int(val[2])
+	genRunReason := int(val[4])
+	sourceStatus := int(val[6])
 
 	// initial populate
 	if ss.ChargingMode == -1 {
